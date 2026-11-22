@@ -10,13 +10,19 @@ const config = {
   modulePathIgnorePatterns: ['<rootDir>/.next/'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    // Jest's jsdom export condition resolves this package's ESM build, which
+    // babel-jest does not transform. Point it at the CJS build instead.
+    '^@stellar/stellar-sdk$':
+      '<rootDir>/node_modules/@stellar/stellar-sdk/lib/cjs/index.js',
     '\\.css$': '<rootDir>/src/__mocks__/styleMock.js',
   },
   transform: {
     '^.+\\.(js|jsx|ts|tsx)$': ['babel-jest', { configFile: './.babelrc' }],
   },
   transformIgnorePatterns: [
-    '/node_modules/(?!(next|next/dist)/)',
+    // `@stellar/stellar-sdk` (and its ESM-only `uint8array-extras`
+    // dependency) must be transformed; everything else stays untouched.
+    '/node_modules/(?!(next|next/dist|@stellar|@exodus|@noble|uint8array-extras)/)',
   ],
   // Use the test-specific tsconfig so the TS language server resolves
   // Jest globals (describe, test, expect, etc.) inside test files.

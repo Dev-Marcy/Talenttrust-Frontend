@@ -357,6 +357,12 @@ const ContractDetailPageContent = ({ id }: { id: string }) => {
             />
             <div className="flex items-center gap-3">
               <h1 className="mt-2 text-3xl font-semibold text-slate-900">Contract #{id}</h1>
+              <Link
+                href={`/contracts/${encodeURIComponent(id)}/activity`}
+                className="mt-2 flex-shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Activity
+              </Link>
               <button
                 onClick={() => copy(id)}
                 className="mt-2 flex-shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
