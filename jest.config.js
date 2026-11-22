@@ -20,8 +20,8 @@ const config = {
     '^.+\\.(js|jsx|ts|tsx)$': ['babel-jest', { configFile: './.babelrc' }],
   },
   transformIgnorePatterns: [
-    // `@stellar/stellar-sdk` (and its ESM-only `uint8array-extras`
-    // dependency) must be transformed; everything else stays untouched.
+    // `@stellar/stellar-sdk` (and its ESM-only dependencies) must be
+    // transformed; everything else stays untouched.
     '/node_modules/(?!(next|next/dist|@stellar|@exodus|@noble|uint8array-extras)/)',
   ],
   // Use the test-specific tsconfig so the TS language server resolves
