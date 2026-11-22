@@ -11,6 +11,7 @@ import React, {
 import { useSearchParams, useRouter } from 'next/navigation';
 import EmptyState from '../../components/EmptyState';
 import MilestonesList from '../../components/MilestonesList';
+import MilestoneBuilder from '../../components/MilestoneBuilder';
 import MilestoneFilter, {
   type MilestoneStatusFilter,
 } from '../../components/milestones/MilestoneFilter';
@@ -69,6 +70,7 @@ const MilestonesContent: React.FC = () => {
     getValidSortOption(searchParams.get('sort')),
   );
   const [showForm, setShowForm] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(false);
   const { showError } = useToast();
   const reconcileFromRepo = useCallback(() => {
     setMilestones(listMilestones());
@@ -183,6 +185,27 @@ const MilestonesContent: React.FC = () => {
   const handleCancelForm = useCallback(() => {
     setShowForm(false);
   }, []);
+
+  const handleImportMilestones = useCallback(
+    (imported: Milestone[]) => {
+      let failed = 0;
+      for (const milestone of imported) {
+        if (!optimisticCreate(milestone).ok) failed += 1;
+      }
+
+      if (failed > 0) {
+        showError({
+          title: 'Some milestones were not imported',
+          description: `${failed} of ${imported.length} could not be saved.`,
+        });
+        return;
+      }
+
+      setIsDismissed(true);
+      setShowBuilder(false);
+    },
+    [optimisticCreate, showError],
+  );
 
   const handleUpdateMilestone = useCallback(
     (id: string, patch: Partial<Milestone>): boolean => {
@@ -312,6 +335,14 @@ const MilestonesContent: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setShowBuilder((current) => !current)}
+                  aria-expanded={showBuilder}
+                  className="flex-shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+                >
+                  Import CSV
+                </button>
+                <button
+                  type="button"
                   aria-label="Add Milestone"
                   onClick={handleAddMilestone}
                   className="flex-shrink-0 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
@@ -340,6 +371,12 @@ const MilestonesContent: React.FC = () => {
             )}
           </MilestonesErrorBoundary>
         </>
+      )}
+
+      {showBuilder && (
+        <div className="mt-6">
+          <MilestoneBuilder onImport={handleImportMilestones} />
+        </div>
       )}
 
       {showForm && (
