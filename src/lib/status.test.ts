@@ -367,13 +367,20 @@ const INSTANCE_XDR =
 
 function contractInstanceXdr(paused: boolean): string {
   const entry = xdr.LedgerEntryData.fromXdr(INSTANCE_XDR, 'base64');
-  const instance = entry.contractData.val.instance;
-  const pausedEntry = (instance.storage ?? []).find((item) => {
+  if (entry.type !== 'contractData') throw new Error('fixture is not a contract data entry');
+  const value = entry.contractData.val;
+  if (value.type !== 'scvContractInstance') throw new Error('fixture is not a contract instance');
+  const instance = value.instance;
+  const storage = instance.storage ?? [];
+  const pausedIndex = storage.findIndex((item) => {
     const key = scValToNative(item.key);
     return Array.isArray(key) && key[0] === 'Paused';
   });
-  if (!pausedEntry) throw new Error('fixture is missing the Paused entry');
-  pausedEntry.val = xdr.ScVal.scvBool(paused);
+  if (pausedIndex < 0) throw new Error('fixture is missing the Paused entry');
+  storage[pausedIndex] = new xdr.ScMapEntry({
+    key: storage[pausedIndex].key,
+    val: xdr.ScVal.scvBool(paused),
+  });
   return entry.toXDR('base64');
 }
 
