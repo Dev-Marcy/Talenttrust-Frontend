@@ -1,5 +1,6 @@
 import nav from '@/lib/nav.json';
 import { site, apiDocsUrl } from '@/lib/site';
+import { safeGet, safeSet } from '@/lib/safeStorage';
 
 export interface CommandItem {
   id: string;
@@ -163,9 +164,9 @@ export function isCommandItem(value: unknown): value is CommandItem {
 
 export function getRecentCommands(): CommandItem[] {
   if (typeof window === 'undefined') return [];
+  const raw = safeGet(RECENT_KEY);
+  if (!raw) return [];
   try {
-    const raw = localStorage.getItem(RECENT_KEY);
-    if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
 
@@ -186,22 +187,18 @@ export function getRecentCommands(): CommandItem[] {
 
 export function saveRecentCommand(command: CommandItem): void {
   if (typeof window === 'undefined') return;
-  try {
-    const existing = getRecentCommands();
-    const filtered = existing.filter((c) => c.id !== command.id);
-    const updated = [
-      {
-        id: command.id,
-        title: command.title,
-        subtitle: command.subtitle,
-        category: 'Recent' as const,
-        href: command.href,
-        actionType: command.actionType,
-      },
-      ...filtered,
-    ].slice(0, 5);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
-  } catch {
-    // localStorage quota or access error
-  }
+  const existing = getRecentCommands();
+  const filtered = existing.filter((c) => c.id !== command.id);
+  const updated = [
+    {
+      id: command.id,
+      title: command.title,
+      subtitle: command.subtitle,
+      category: 'Recent' as const,
+      href: command.href,
+      actionType: command.actionType,
+    },
+    ...filtered,
+  ].slice(0, 5);
+  safeSet(RECENT_KEY, JSON.stringify(updated));
 }
