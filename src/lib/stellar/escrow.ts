@@ -7,6 +7,8 @@ import {
   Address,
 } from '@stellar/stellar-sdk';
 import { getRpcServer, NETWORK_PASSPHRASE, simulateRead } from './rpc';
+import { site } from '../site';
+import { formatStroopsTrimmed } from './stroops';
 import { stellarConfig } from './config';
 import { parseContractError } from './errors';
 
@@ -258,8 +260,6 @@ export async function buildCancelTx(
 
 /** Format stroops (bigint) as 7-decimal XLM string. No Number() on stroop values. */
 export function formatStroops(stroops: bigint): string {
-  const whole = stroops / 10_000_000n;
-  const frac = stroops % 10_000_000n;
-  const fracStr = frac.toString().padStart(7, '0').replace(/0+$/, '') || '0';
-  return `${whole}.${fracStr}`;
+  const formatted = formatStroopsTrimmed(stroops);
+  return formatted.includes('.') ? formatted : `${formatted}.0`;
 }

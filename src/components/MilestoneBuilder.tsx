@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
+import { formatStroopsTrimmed, parseStroops } from '@/lib/stellar/stroops';
 import { toCsv } from '@/lib/csv';
 import type { MilestoneImportError } from '@/lib/milestoneImport';
 
@@ -58,15 +59,12 @@ const AMOUNT_RE = new RegExp(`^\\d+(?:\\.\\d{1,${MAX_AMOUNT_DECIMALS}})?$`);
 export function toStroops(amount: string): bigint | null {
   const value = amount.trim();
   if (!AMOUNT_RE.test(value)) return null;
-  const [whole, fraction = ''] = value.split('.');
-  return BigInt(whole) * 10_000_000n + BigInt(fraction.padEnd(MAX_AMOUNT_DECIMALS, '0'));
+  return parseStroops(value);
 }
 
 /** Formats integer stroops as a decimal string without float drift (e.g. 0.1 + 0.2 -> "0.3"). */
 export function formatStroops(stroops: bigint): string {
-  const whole = stroops / 10_000_000n;
-  const fraction = (stroops % 10_000_000n).toString().padStart(MAX_AMOUNT_DECIMALS, '0').replace(/0+$/, '');
-  return fraction ? `${whole}.${fraction}` : whole.toString();
+  return formatStroopsTrimmed(stroops);
 }
 
 /** Sum of all valid row amounts, in stroops. */
