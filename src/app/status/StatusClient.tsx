@@ -12,6 +12,7 @@ import {
   type ChainConfigResult,
 } from '@/lib/status';
 import { site } from '@/lib/site';
+import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 
 export const AUTO_REFRESH_MS = 30_000;
 export const HISTORY_LIMIT = 20;
@@ -245,6 +246,7 @@ interface Checks {
 const EMPTY_CHECKS: Checks = { api: null, chain: null, rpc: null, contract: null };
 
 export default function StatusClient() {
+  const isOnline = useOnlineStatus();
   const [checks, setChecks] = useState<Checks>(EMPTY_CHECKS);
   const [history, setHistory] = useState<CheckHistory>(emptyHistory);
   const [running, setRunning] = useState(false);
@@ -253,28 +255,41 @@ export default function StatusClient() {
   const historyRef = useRef<CheckHistory>(emptyHistory());
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  const isOnlineRef = useRef(isOnline);
+  const lastCheckedAtRef = useRef<number | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  isOnlineRef.current = isOnline;
 
   const runChecks = useCallback(async () => {
-    if (inFlight.current) return;
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine) || inFlight.current) {
+      return;
+    }
     inFlight.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setRunning(true);
     setAnnouncement('Running status checks…');
 
     try {
       // Health and chain config first: the chain endpoint supplies the RPC URL.
-      const [apiResult, chainResult] = await Promise.all([checkApi(), checkChainConfig()]);
-      if (!mounted.current) return;
+      const [apiResult, chainResult] = await Promise.all([
+        checkApi(controller.signal),
+        checkChainConfig(controller.signal),
+      ]);
+      if (!mounted.current || controller.signal.aborted) return;
       setChecks((prev) => ({ ...prev, api: apiResult, chain: chainResult }));
 
       const rpcUrl = chainResult.rpcUrl || site.rpcUrl;
       const [rpcResult, contractResult] = await Promise.all([
-        checkRpc(rpcUrl),
-        checkContract(rpcUrl),
+        checkRpc(rpcUrl, controller.signal),
+        checkContract(rpcUrl, controller.signal),
       ]);
-      if (!mounted.current) return;
+      if (!mounted.current || controller.signal.aborted) return;
 
       const next: Checks = { api: apiResult, chain: chainResult, rpc: rpcResult, contract: contractResult };
       setChecks(next);
+      lastCheckedAtRef.current = Date.now();
       setLastChecked(new Date());
       setAnnouncement(bannerLabel(aggregateState([apiResult, chainResult, rpcResult, contractResult])));
 
@@ -288,6 +303,9 @@ export default function StatusClient() {
       setHistory(nextHistory);
       saveHistory(nextHistory);
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       inFlight.current = false;
       if (mounted.current) setRunning(false);
     }
@@ -299,18 +317,47 @@ export default function StatusClient() {
     setHistory(stored);
   }, []);
 
-  // Run on mount and every 30s while the tab is visible.
+  // Run on mount, every 30s while visible & online, and immediately when returning to a visible tab after the interval.
   useEffect(() => {
     mounted.current = true;
-    runChecks();
+    if (isOnlineRef.current && document.visibilityState !== 'hidden') {
+      runChecks();
+    }
+
     const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') runChecks();
+      if (document.visibilityState !== 'hidden' && isOnlineRef.current) {
+        runChecks();
+      }
     }, AUTO_REFRESH_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isOnlineRef.current) {
+        const last = lastCheckedAtRef.current;
+        if (last === null || Date.now() - last >= AUTO_REFRESH_MS) {
+          runChecks();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       mounted.current = false;
+      abortControllerRef.current?.abort();
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [runChecks]);
+
+  // Refresh when connectivity is restored if the tab is visible and data is missing or stale.
+  useEffect(() => {
+    if (isOnline && document.visibilityState !== 'hidden') {
+      const last = lastCheckedAtRef.current;
+      if (last === null || Date.now() - last >= AUTO_REFRESH_MS) {
+        runChecks();
+      }
+    }
+  }, [isOnline, runChecks]);
 
   const results = [checks.api, checks.chain, checks.rpc, checks.contract].filter(
     Boolean,
@@ -337,6 +384,12 @@ export default function StatusClient() {
         <StateIcon state={overall} />
         <span>{overall === 'loading' ? 'Checking all systems…' : bannerLabel(overall)}</span>
       </div>
+
+      {!isOnline && (
+        <div className="alert alert-warning" role="status" data-testid="offline-notice">
+          You are offline - results may be outdated
+        </div>
+      )}
 
       {mismatch && (
         <div className="alert alert-error" role="alert" data-testid="mismatch-alert">
@@ -385,7 +438,7 @@ export default function StatusClient() {
           type="button"
           className="btn btn-secondary"
           onClick={runChecks}
-          disabled={running}
+          disabled={running || !isOnline}
           aria-label="Re-run all status checks"
         >
           {running ? 'Checking…' : 'Re-run checks'}

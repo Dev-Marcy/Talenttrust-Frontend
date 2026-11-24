@@ -1,13 +1,13 @@
-import { scValToNative, type rpc, type xdr } from '@stellar/stellar-sdk';
+import { scValToNative, xdr, type rpc } from '@stellar/stellar-sdk';
 import { site } from '../site';
 import { getRpcServer } from './rpc';
+import { formatStroopsTrimmed } from './stroops';
 
 /** ~24h of ledgers at a 5s close time. */
 export const EVENT_LOOKBACK_LEDGERS = 17_280;
 export const DEFAULT_EVENT_LIMIT = 10;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
-const STROOPS_PER_XLM = BigInt(10_000_000);
 
 interface EventMeta {
   /** Stable dedupe key: event id + paging token. */
@@ -32,6 +32,9 @@ export type ActivityEvent = EventMeta &
   );
 
 export type ActivityEventType = ActivityEvent['type'];
+
+/** Event types surfaced by the activity feed filter chips. */
+export type ActivityFilterType = 'deposit' | 'release' | 'dispute' | 'rep';
 
 /** The subset of `rpc.Api.EventResponse` the decoder relies on. */
 export type RawContractEvent = Pick<rpc.Api.EventResponse, 'id' | 'ledger' | 'ledgerClosedAt' | 'txHash' | 'topic' | 'value'> & {
@@ -116,12 +119,10 @@ export function decodeEvent(raw: RawContractEvent): ActivityEvent {
 
 /** Format stroops as XLM, trimming trailing zeros ("1500000000" -> "150"). */
 export function formatXlm(stroops: bigint): string {
-  const negative = stroops < BigInt(0);
-  const abs = negative ? -stroops : stroops;
-  const whole = abs / STROOPS_PER_XLM;
-  const fraction = (abs % STROOPS_PER_XLM).toString().padStart(7, '0').replace(/0+$/, '');
-  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${negative ? '-' : ''}${grouped}${fraction ? `.${fraction}` : ''} XLM`;
+  const formatted = formatStroopsTrimmed(stroops);
+  const [whole, fraction] = formatted.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${grouped}${fraction ? `.${fraction}` : ''} XLM`;
 }
 
 export function shortAddress(address: string): string {
@@ -238,4 +239,102 @@ export async function fetchRecentEvents({
 }: FetchRecentEventsOptions = {}): Promise<ActivityEvent[]> {
   const { events } = await fetchEventsSince({ limit, server, contractId });
   return events;
+}
+
+/** Encode an escrow id as the base64 ScVal used in the second event topic. */
+export function encodeEscrowTopic(escrowId: bigint | number | string): string {
+  return xdr.ScVal.scvU64(parseEscrowId(escrowId)).toXDR('base64');
+}
+
+/**
+ * Build the `getEvents` filter for one escrow.
+ *
+ * Escrow events use the topic shape `[symbol, escrow id]`, so the first
+ * segment is a wildcard (any event type) and the second must match the
+ * encoded escrow id.
+ */
+export function buildEscrowEventFilter(
+  escrowId: bigint | number | string,
+  contractId: string,
+): rpc.Api.EventFilter {
+  return {
+    type: 'contract',
+    contractIds: [contractId],
+    topics: [['*'], [encodeEscrowTopic(escrowId)]],
+  };
+}
+
+function parseEscrowId(value: bigint | number | string): bigint {
+  if (typeof value === 'bigint') {
+    if (value < BigInt(0)) throw new RangeError('escrowId must be non-negative');
+    return value;
+  }
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    if (value < 0) throw new RangeError('escrowId must be non-negative');
+    return BigInt(value);
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return BigInt(value);
+  }
+  throw new TypeError('escrowId must be a non-negative integer');
+}
+
+/** Oldest first; ties broken by event id (which is ordered within a ledger). */
+export function compareEventsAsc(a: ActivityEvent, b: ActivityEvent): number {
+  if (a.ledger !== b.ledger) return a.ledger - b.ledger;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+export interface FetchEscrowEventsOptions {
+  server?: Pick<rpc.Server, 'getLatestLedger' | 'getEvents'>;
+  contractId?: string;
+  lookbackLedgers?: number;
+}
+
+/**
+ * Fetch every on-chain event for one escrow within the lookback window.
+ *
+ * The RPC filter restricts results to the `[symbol, escrow id]` topic shape;
+ * the remaining pages are followed with the returned cursor and de-duplicated
+ * by event key. Results are returned oldest first for a chronological timeline.
+ */
+export async function fetchEscrowEvents(
+  escrowId: bigint | number | string,
+  {
+    server = getRpcServer(),
+    contractId = site.contractId,
+    lookbackLedgers = EVENT_LOOKBACK_LEDGERS,
+  }: FetchEscrowEventsOptions = {},
+): Promise<ActivityEvent[]> {
+  const id = parseEscrowId(escrowId);
+  if (!Number.isInteger(lookbackLedgers) || lookbackLedgers < 0) {
+    throw new RangeError('lookbackLedgers must be a non-negative integer');
+  }
+
+  const filters: rpc.Api.EventFilter[] = [buildEscrowEventFilter(id, contractId)];
+  const latest = await server.getLatestLedger();
+  const startLedger = Math.max(1, latest.sequence - lookbackLedgers);
+
+  const byKey = new Map<string, ActivityEvent>();
+  let page: Awaited<ReturnType<rpc.Server['getEvents']>> = await server.getEvents({
+    startLedger,
+    filters,
+    limit: PAGE_SIZE,
+  });
+
+  for (let i = 0; ; i += 1) {
+    const events = Array.isArray(page?.events) ? page.events : null;
+    if (!events) throw new Error('Malformed getEvents response');
+
+    for (const raw of events) {
+      const event = decodeEvent(raw);
+      if ('escrowId' in event && event.escrowId !== id) continue;
+      byKey.set(event.key, event);
+    }
+
+    if (events.length < PAGE_SIZE || !page.cursor || i + 1 >= MAX_PAGES) break;
+    page = await server.getEvents({ cursor: page.cursor, filters, limit: PAGE_SIZE });
+  }
+
+  return [...byKey.values()].sort(compareEventsAsc);
 }

@@ -2,9 +2,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RouteError } from '@/components/ui/RouteError';
+import { __resetDedupeForTests, setErrorReporter } from '@/lib/errorReporter';
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  __resetDedupeForTests();
+  setErrorReporter(null);
 });
 
 const makeError = () => Object.assign(new Error('boom internal detail'), { digest: 'abc123' });
@@ -35,5 +38,16 @@ describe('RouteError', () => {
   it('exposes a Go home link', () => {
     render(<RouteError error={makeError()} reset={vi.fn()} />);
     expect(screen.getByRole('link', { name: /go home/i })).toHaveAttribute('href', '/');
+  });
+
+  it('reports the error once per mount, even across re-renders', () => {
+    const reporter = vi.fn();
+    setErrorReporter(reporter);
+    const error = makeError();
+    const { rerender } = render(<RouteError error={error} reset={vi.fn()} />);
+    rerender(<RouteError error={error} reset={vi.fn()} />);
+    expect(reporter).toHaveBeenCalledTimes(1);
+    expect(reporter.mock.calls[0][0]).toMatchObject({ message: error.message, name: error.name });
+    expect(reporter.mock.calls[0][1]).toMatchObject({ source: 'route-error', digest: 'abc123' });
   });
 });
